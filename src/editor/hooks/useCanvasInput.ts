@@ -17,9 +17,8 @@ import {
   distanceToArc,
   roadHalfWidth,
   pointInOrientedRect,
-  distance,
   arcFromThreePoints,
-  snapToJunction,
+  snapToFeatures,
 } from '@shared/geometry';
 import { JUNCTION_HALF } from '@shared/types';
 
@@ -131,8 +130,18 @@ export function useCanvasInput(
         return;
       }
 
-      const worldPt = canvasToWorld(canvasPt, vp);
-      editorActions.setHoverPoint(worldPt);
+      const rawWorld = canvasToWorld(canvasPt, vp);
+      const state = stateRef.current;
+      const model = modelRef.current;
+      
+      let hoverPt = rawWorld;
+      if (state.tool === 'draw-line' || state.tool === 'draw-arc') {
+        hoverPt = snapToFeatures(rawWorld, model, JUNCTION_SNAP_THRESHOLD) ?? snapToGrid(rawWorld, SNAP_GRID);
+      } else {
+        hoverPt = snapToGrid(rawWorld, SNAP_GRID);
+      }
+      
+      editorActions.setHoverPoint(hoverPt);
     };
 
     const onMouseUp = (_e: MouseEvent) => {
@@ -150,6 +159,8 @@ export function useCanvasInput(
       const worldPt = snapToGrid(rawWorld, SNAP_GRID);
       const state = stateRef.current;
       const model = modelRef.current;
+      
+      const snapWorldPt = snapToFeatures(rawWorld, model, JUNCTION_SNAP_THRESHOLD) ?? worldPt;
 
       switch (state.tool) {
         case 'select': {
@@ -159,17 +170,15 @@ export function useCanvasInput(
         }
 
         case 'draw-line': {
-          // Try to snap to a junction connection point first, then fall back to grid
-          const lineSnap = snapToJunction(worldPt, model.junctions, JUNCTION_SNAP_THRESHOLD) ?? worldPt;
           if (!state.lineGesture) {
-            editorActions.setLineGesture({ phase: 'start-placed', start: lineSnap });
+            editorActions.setLineGesture({ phase: 'start-placed', start: snapWorldPt });
           } else {
             const { start } = state.lineGesture;
             const road: RoadLine = {
               id: nextId('r'),
               kind: 'line',
               start,
-              end: lineSnap,
+              end: snapWorldPt,
               lanes: { left: 1, right: 1, laneWidth: DEFAULT_LANE_WIDTH },
             };
             dispatch({ type: 'ADD_ROAD', road });
@@ -186,12 +195,12 @@ export function useCanvasInput(
             editorActions.setArcGesture({
               phase: 'start-placed',
               center: gesture.center,
-              startPt: worldPt,
+              startPt: snapWorldPt,
               clockwise: e.shiftKey,
             });
           } else if (gesture.phase === 'start-placed') {
             const { center, startPt, clockwise } = gesture;
-            const { radius, startAngle, endAngle } = arcFromThreePoints(center, startPt, worldPt, clockwise);
+            const { radius, startAngle, endAngle } = arcFromThreePoints(center, startPt, snapWorldPt, clockwise);
             const road: RoadArc = {
               id: nextId('r'),
               kind: 'arc',

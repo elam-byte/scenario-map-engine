@@ -1,4 +1,4 @@
-import type { Point, RoadLanes, Junction } from './types';
+import type { Point, RoadLanes, Junction, MapModel } from './types';
 import { JUNCTION_HALF } from './types';
 
 // ---------------------------------------------------------------------------
@@ -242,6 +242,63 @@ export function snapToJunction(
 export function pointInJunction(pt: Point, j: Junction): boolean {
   const h = JUNCTION_HALF;
   return pt.x >= j.x - h && pt.x <= j.x + h && pt.y >= j.y - h && pt.y <= j.y + h;
+}
+
+// ---------------------------------------------------------------------------
+// Snapping to general features (Junctions & Roads)
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns all connection points for a given map model:
+ * - Junction connection points
+ * - Road start and end points
+ */
+export function getFeatureConnectionPoints(model: MapModel): Point[] {
+  const points: Point[] = [];
+  
+  for (const j of model.junctions) {
+    points.push(...junctionConnectionPoints(j));
+  }
+  
+  for (const r of model.roads) {
+    if (r.kind === 'line') {
+      points.push(r.start, r.end);
+    } else if (r.kind === 'arc') {
+      points.push({
+        x: r.center.x + r.radius * Math.cos(r.startAngle),
+        y: r.center.y + r.radius * Math.sin(r.startAngle)
+      }, {
+        x: r.center.x + r.radius * Math.cos(r.endAngle),
+        y: r.center.y + r.radius * Math.sin(r.endAngle)
+      });
+    }
+  }
+  
+  return points;
+}
+
+/**
+ * Snap a point to the nearest feature connection point if within `threshold`.
+ * Returns the snapped point, or null if no feature is close enough.
+ */
+export function snapToFeatures(
+  pt: Point,
+  model: MapModel,
+  threshold: number,
+): Point | null {
+  const points = getFeatureConnectionPoints(model);
+  let best: Point | null = null;
+  let bestDist = threshold;
+  
+  for (const cp of points) {
+    const d = distance(pt, cp);
+    if (d < bestDist) {
+      bestDist = d;
+      best = cp;
+    }
+  }
+  
+  return best;
 }
 
 // ---------------------------------------------------------------------------
