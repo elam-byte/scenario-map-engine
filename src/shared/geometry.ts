@@ -1,5 +1,5 @@
 import type { Point, RoadLanes, Junction, MapModel } from './types';
-import { JUNCTION_HALF } from './types';
+import { JUNCTION_ARM_LENGTH } from './types';
 
 // ---------------------------------------------------------------------------
 // Basic math
@@ -192,24 +192,28 @@ export function sampleArc(
 // Junction connection points
 // ---------------------------------------------------------------------------
 
+/** Index (0–3) of the closed side based on rotation: 0=south,1=east,2=north,3=west */
+export function closedSideIndex(rotation: number): number {
+  const idx = Math.round((rotation / (Math.PI / 2)) % 4);
+  return ((idx % 4) + 4) % 4;
+}
+
 /**
- * Returns the open-edge midpoints (connection points) of a junction.
+ * Returns the arm-tip connection points of a junction (10 m from centre).
  * 4-way: 4 points. T-junction: 3 points (closed side excluded).
+ * Order: south, east, north, west.
  */
 export function junctionConnectionPoints(j: Junction): Point[] {
-  const h = JUNCTION_HALF;
-  // Order: bottom, right, top, left
-  const allMids: Point[] = [
-    { x: j.x, y: j.y - h },
-    { x: j.x + h, y: j.y },
-    { x: j.x, y: j.y + h },
-    { x: j.x - h, y: j.y },
+  const L = JUNCTION_ARM_LENGTH;
+  const allTips: Point[] = [
+    { x: j.x,     y: j.y - L }, // south (rotation=0 → closed)
+    { x: j.x + L, y: j.y     }, // east  (rotation=π/2 → closed)
+    { x: j.x,     y: j.y + L }, // north (rotation=π → closed)
+    { x: j.x - L, y: j.y     }, // west  (rotation=3π/2 → closed)
   ];
-  if (j.junctionType === '4-way') return allMids;
-  // T-junction: exclude closed side
-  const ci = Math.round((j.rotation / (Math.PI / 2)) % 4);
-  const closedIdx = ((ci % 4) + 4) % 4;
-  return allMids.filter((_, i) => i !== closedIdx);
+  if (j.junctionType === '4-way') return allTips;
+  const closedIdx = closedSideIndex(j.rotation);
+  return allTips.filter((_, i) => i !== closedIdx);
 }
 
 /**
@@ -237,11 +241,26 @@ export function snapToJunction(
 }
 
 /**
- * Check if a point is inside a junction's 10m×10m bounding box.
+ * Check if a point is inside a junction's cross/T-shaped region.
+ * Covers the centre box plus each open arm (10 m from centre).
  */
 export function pointInJunction(pt: Point, j: Junction): boolean {
-  const h = JUNCTION_HALF;
-  return pt.x >= j.x - h && pt.x <= j.x + h && pt.y >= j.y - h && pt.y <= j.y + h;
+  const hw = j.laneWidth; // half road width = one lane
+  const L = JUNCTION_ARM_LENGTH;
+  const dx = pt.x - j.x;
+  const dy = pt.y - j.y;
+  // Centre intersection box
+  if (Math.abs(dx) <= hw && Math.abs(dy) <= hw) return true;
+  const ci = closedSideIndex(j.rotation); // 0=south,1=east,2=north,3=west
+  // South arm (dir: dy < 0)
+  if (ci !== 0 && Math.abs(dx) <= hw && dy >= -L && dy <= 0) return true;
+  // East arm (dir: dx > 0)
+  if (ci !== 1 && Math.abs(dy) <= hw && dx >= 0 && dx <= L) return true;
+  // North arm (dir: dy > 0)
+  if (ci !== 2 && Math.abs(dx) <= hw && dy >= 0 && dy <= L) return true;
+  // West arm (dir: dx < 0)
+  if (ci !== 3 && Math.abs(dy) <= hw && dx >= -L && dx <= 0) return true;
+  return false;
 }
 
 // ---------------------------------------------------------------------------

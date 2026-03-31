@@ -7,6 +7,8 @@ export type MapAction =
   | { type: 'ADD_VEHICLE'; vehicle: Vehicle }
   | { type: 'DELETE_ENTITY'; id: string }
   | { type: 'UPDATE_ROAD_LANES'; id: string; lanes: RoadLanes }
+  | { type: 'MOVE_ROAD'; id: string; dx: number; dy: number }
+  | { type: 'SET_ROAD_LENGTH'; id: string; length: number }
   | { type: 'UPDATE_VEHICLE'; id: string; patch: Partial<Vehicle> }
   | { type: 'UPDATE_JUNCTION'; id: string; patch: Partial<Junction> }
   | { type: 'IMPORT_MAP'; model: MapModel }
@@ -19,7 +21,7 @@ export type HistoryState = {
   future: MapModel[];
 };
 
-export function makeEmptyMap(width = 500, height = 500): MapModel {
+export function makeEmptyMap(width = 500, height = 281): MapModel {
   return {
     meta: {
       version: 'ats-map-v1',
@@ -78,6 +80,47 @@ export function mapReducer(state: HistoryState, action: MapAction): HistoryState
           r.id === action.id ? { ...r, lanes: action.lanes } : r,
         ),
       }));
+
+    case 'MOVE_ROAD': {
+      const { id, dx, dy } = action;
+      return applyPresent(state, (m) => ({
+        ...m,
+        roads: m.roads.map((r) => {
+          if (r.id !== id) return r;
+          if (r.kind === 'line') {
+            return {
+              ...r,
+              start: { x: r.start.x + dx, y: r.start.y + dy },
+              end:   { x: r.end.x   + dx, y: r.end.y   + dy },
+            };
+          }
+          return { ...r, center: { x: r.center.x + dx, y: r.center.y + dy } };
+        }),
+      }));
+    }
+
+    case 'SET_ROAD_LENGTH': {
+      const { id, length } = action;
+      if (length <= 0) return state;
+      return applyPresent(state, (m) => ({
+        ...m,
+        roads: m.roads.map((r) => {
+          if (r.id !== id) return r;
+          if (r.kind === 'line') {
+            const dx = r.end.x - r.start.x;
+            const dy = r.end.y - r.start.y;
+            const cur = Math.sqrt(dx * dx + dy * dy);
+            if (cur === 0) return r;
+            const scale = length / cur;
+            return { ...r, end: { x: r.start.x + dx * scale, y: r.start.y + dy * scale } };
+          }
+          // arc: fix center + startAngle, adjust endAngle for desired arc length
+          const newSweep = length / r.radius;
+          const dir = r.clockwise ? -1 : 1;
+          return { ...r, endAngle: r.startAngle + dir * newSweep };
+        }),
+      }));
+    }
 
     case 'UPDATE_VEHICLE':
       return applyPresent(state, (m) => ({

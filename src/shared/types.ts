@@ -9,9 +9,8 @@ export type WorldMeta = {
 
 export type JunctionType = '4-way' | 't-junction';
 
-/** Junction size: 10 m × 10 m square */
-export const JUNCTION_SIZE = 10;
-export const JUNCTION_HALF = JUNCTION_SIZE / 2; // 5 m
+/** Each junction arm extends this many metres from the junction centre */
+export const JUNCTION_ARM_LENGTH = 10;
 
 export type Junction = {
   id: string;
@@ -19,8 +18,10 @@ export type Junction = {
   y: number;
   junctionType: JunctionType;
   /** Rotation in radians (multiples of π/2). For T-junction, determines which side is closed.
-   *  0 = bottom closed, π/2 = right closed, π = top closed, 3π/2 = left closed */
+   *  0 = south closed, π/2 = east closed, π = north closed, 3π/2 = west closed */
   rotation: number;
+  /** Lane width for this junction's arms (m). Default DEFAULT_LANE_WIDTH */
+  laneWidth: number;
 };
 
 /** Lanes relative to travel direction (start → end / startAngle → endAngle) */
@@ -96,4 +97,10 @@ export const DEFAULT_LANE_WIDTH = 3.5;
 export const DEFAULT_VEHICLE_LENGTH = 3.0;
 export const DEFAULT_VEHICLE_WIDTH = 1.5;
 export const DEFAULT_VEHICLE_COLOR = '#22c55e';
-export const WORLD_SIZES = [500, 1000] as const;
+
+/** Available world sizes (16:9 aspect ratio) */
+export const WORLD_SIZES = [
+  { width: 500,  height: 281 },
+  { width: 1000, height: 562 },
+] as const;
+export type WorldSize = typeof WORLD_SIZES[number];

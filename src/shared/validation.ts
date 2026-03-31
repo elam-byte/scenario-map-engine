@@ -25,7 +25,7 @@ const RoadArcSchema = z.object({
   id: z.string().min(1),
   kind: z.literal('arc'),
   center: PointSchema,
-  radius: z.number().positive().finite(),
+  radius: z.number().min(0).finite(),
   startAngle: z.number().finite(),
   endAngle: z.number().finite(),
   clockwise: z.boolean(),
@@ -61,6 +61,7 @@ const JunctionSchema = z.object({
   y: z.number().finite(),
   junctionType: z.enum(['4-way', 't-junction']).default('4-way'),
   rotation: z.number().finite().default(0),
+  laneWidth: z.number().min(2.8).max(4.0).default(3.5),
 });
 
 export const MapModelSchema = z.object({

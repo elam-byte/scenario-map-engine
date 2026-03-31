@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import type { Tool } from '../hooks/useEditorState';
 import type { MapAction } from '../store/mapReducer';
+import { WORLD_SIZES } from '@shared/types';
 import { safeParseMapModel } from '@shared/validation';
 
 type Props = {
@@ -12,25 +13,30 @@ type Props = {
 };
 
 const TOOLS: { tool: Tool; label: string; icon: string; title: string }[] = [
-  { tool: 'select',        icon: '↖',  label: 'Select',   title: 'Select / Move (S)' },
-  { tool: 'draw-line',     icon: '╱',  label: 'Line',     title: 'Draw Line Road (L)' },
-  { tool: 'draw-arc',      icon: '⌒',  label: 'Arc',      title: 'Draw Arc Road (A)' },
-  { tool: 'place-junction',icon: '⊞',  label: '4-Way',    title: 'Place 4-Way Junction (J)' },
-  { tool: 'place-t-junction', icon: '⊤', label: 'T-Junc', title: 'Place T-Junction (T)' },
-  { tool: 'place-vehicle', icon: '▭',  label: 'Vehicle',  title: 'Place Vehicle (V)' },
+  { tool: 'select',           icon: '↖',  label: 'Select',   title: 'Select / Move (S)' },
+  { tool: 'draw-line',        icon: '╱',  label: 'Line',     title: 'Draw Line Road (L)' },
+  { tool: 'draw-arc',         icon: '⌒',  label: 'Arc',      title: 'Draw Arc Road (A)' },
+  { tool: 'place-junction',   icon: '⊞',  label: '4-Way',    title: 'Place 4-Way Junction (J)' },
+  { tool: 'place-t-junction', icon: '⊤',  label: 'T-Junc',  title: 'Place T-Junction (T)' },
+  { tool: 'place-vehicle',    icon: '▭',  label: 'Vehicle',  title: 'Place Vehicle (V)' },
 ];
 
+const SIDEBAR_WIDTH = 152;
+
 const sidebarStyle: React.CSSProperties = {
-  width: 72,
-  minWidth: 72,
+  width: SIDEBAR_WIDTH,
+  minWidth: SIDEBAR_WIDTH,
   background: '#12122a',
   borderRight: '1px solid #2d2d4a',
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
-  padding: '10px 0',
+  padding: '10px 6px',
   gap: 4,
+  overflowY: 'auto',
 };
+
+const BTN_WIDTH = SIDEBAR_WIDTH - 16;
 
 function ToolButton({
   icon,
@@ -50,39 +56,41 @@ function ToolButton({
       title={title}
       onClick={onClick}
       style={{
-        width: 52,
-        padding: '8px 4px',
+        width: BTN_WIDTH,
+        padding: '8px 10px',
         background: active ? '#3b3b6b' : 'transparent',
         border: active ? '1px solid #6366f1' : '1px solid transparent',
         borderRadius: 6,
-        color: active ? '#a5b4fc' : '#6b7280',
+        color: active ? '#a5b4fc' : '#9ca3af',
         cursor: 'pointer',
         display: 'flex',
-        flexDirection: 'column',
+        flexDirection: 'row',
         alignItems: 'center',
-        gap: 3,
+        gap: 8,
         fontSize: 18,
         lineHeight: 1,
         transition: 'background 0.1s',
       }}
     >
-      <span>{icon}</span>
-      <span style={{ fontSize: 9 }}>{label}</span>
+      <span style={{ width: 22, textAlign: 'center' }}>{icon}</span>
+      <span style={{ fontSize: 12, fontWeight: active ? 600 : 400 }}>{label}</span>
     </button>
   );
 }
 
 function Divider() {
-  return <div style={{ width: 44, height: 1, background: '#2d2d4a', margin: '4px 0' }} />;
+  return <div style={{ width: BTN_WIDTH, height: 1, background: '#2d2d4a', margin: '4px 0' }} />;
 }
 
 function IconButton({
   icon,
+  label,
   title,
   onClick,
   disabled,
 }: {
   icon: string;
+  label?: string;
   title: string;
   onClick: () => void;
   disabled?: boolean;
@@ -93,17 +101,22 @@ function IconButton({
       onClick={onClick}
       disabled={disabled}
       style={{
-        width: 52,
-        padding: '6px 4px',
+        width: BTN_WIDTH,
+        padding: '6px 10px',
         background: 'transparent',
         border: '1px solid transparent',
         borderRadius: 6,
-        color: disabled ? '#374151' : '#6b7280',
+        color: disabled ? '#374151' : '#9ca3af',
         cursor: disabled ? 'not-allowed' : 'pointer',
+        display: 'flex',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
         fontSize: 16,
       }}
     >
-      {icon}
+      <span style={{ width: 22, textAlign: 'center' }}>{icon}</span>
+      {label && <span style={{ fontSize: 12 }}>{label}</span>}
     </button>
   );
 }
@@ -138,7 +151,7 @@ export function Toolbar({ activeTool, onToolChange, dispatch, canUndo, canRedo }
   return (
     <div style={sidebarStyle}>
       {/* New world */}
-      <IconButton icon="＋" title="New World" onClick={() => setWorldPickerOpen(true)} />
+      <IconButton icon="＋" label="New World" title="New World" onClick={() => setWorldPickerOpen(true)} />
 
       {worldPickerOpen && (
         <WorldDialog
@@ -167,14 +180,15 @@ export function Toolbar({ activeTool, onToolChange, dispatch, canUndo, canRedo }
       <Divider />
 
       {/* Undo / Redo */}
-      <IconButton icon="↩" title="Undo (Ctrl+Z)" onClick={() => dispatch({ type: 'UNDO' })} disabled={!canUndo} />
-      <IconButton icon="↪" title="Redo (Ctrl+Y)" onClick={() => dispatch({ type: 'REDO' })} disabled={!canRedo} />
+      <IconButton icon="↩" label="Undo" title="Undo (Ctrl+Z)" onClick={() => dispatch({ type: 'UNDO' })} disabled={!canUndo} />
+      <IconButton icon="↪" label="Redo" title="Redo (Ctrl+Y)" onClick={() => dispatch({ type: 'REDO' })} disabled={!canRedo} />
 
       <Divider />
 
-      {/* Import */}
+      {/* Import / Export */}
       <IconButton
         icon="📂"
+        label="Import"
         title="Import Map JSON"
         onClick={() => fileInputRef.current?.click()}
       />
@@ -185,15 +199,11 @@ export function Toolbar({ activeTool, onToolChange, dispatch, canUndo, canRedo }
         style={{ display: 'none' }}
         onChange={handleImport}
       />
-
-      {/* Export */}
       <IconButton
         icon="💾"
+        label="Export"
         title="Export Map JSON"
-        onClick={() => {
-          // dispatch not needed — model is read in App; handled below via event
-          document.dispatchEvent(new CustomEvent('ats-export'));
-        }}
+        onClick={() => document.dispatchEvent(new CustomEvent('ats-export'))}
       />
     </div>
   );
@@ -206,7 +216,6 @@ function WorldDialog({
   onConfirm: (w: number, h: number) => void;
   onCancel: () => void;
 }) {
-  const sizes: [number, number][] = [[500, 500], [1000, 1000]];
   return (
     <div
       style={{
@@ -229,26 +238,28 @@ function WorldDialog({
           display: 'flex',
           flexDirection: 'column',
           gap: 12,
-          minWidth: 240,
+          minWidth: 260,
         }}
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ color: '#e5e7eb', fontWeight: 600, fontSize: 15 }}>New World</div>
-        {sizes.map(([w, h]) => (
+        {WORLD_SIZES.map(({ width, height }) => (
           <button
-            key={`${w}x${h}`}
-            onClick={() => onConfirm(w, h)}
+            key={`${width}x${height}`}
+            onClick={() => onConfirm(width, height)}
             style={{
               background: '#0f0f23',
               border: '1px solid #4a4a7a',
               borderRadius: 6,
               color: '#a5b4fc',
-              padding: '8px 16px',
+              padding: '10px 16px',
               cursor: 'pointer',
               fontSize: 14,
+              textAlign: 'left',
             }}
           >
-            {w} × {h} m
+            <div style={{ fontWeight: 600 }}>{width} × {height} m</div>
+            <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>16:9 · {width === 500 ? 'Small' : 'Large'}</div>
           </button>
         ))}
         <button

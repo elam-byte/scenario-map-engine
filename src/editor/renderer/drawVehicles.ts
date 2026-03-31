@@ -10,8 +10,11 @@ export function drawVehicles(
   vehicles: Vehicle[],
   selectedId: string | null,
   vp: Viewport,
+  dragId?: string | null,
+  dragPos?: { x: number; y: number } | null,
 ): void {
-  for (const v of vehicles) {
+  for (const rawV of vehicles) {
+    const v = (rawV.id === dragId && dragPos) ? { ...rawV, x: dragPos.x, y: dragPos.y } : rawV;
     ctx.save();
 
     // Move to vehicle center and rotate. The Y-flip from setTransform means

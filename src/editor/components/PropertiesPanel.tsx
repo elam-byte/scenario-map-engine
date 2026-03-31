@@ -1,5 +1,6 @@
-import type { ChangeEvent } from 'react';
+import { useState, useEffect, type ChangeEvent } from 'react';
 import type { MapModel, Road, Vehicle, Junction, RoadLanes } from '@shared/types';
+import { arcSweep } from '@shared/geometry';
 import type { MapAction } from '../store/mapReducer';
 
 type Props = {
@@ -71,6 +72,60 @@ function NumInput({
   );
 }
 
+/** Commit-on-blur/Enter input for precise numeric editing */
+function PreciseNumInput({
+  value,
+  onCommit,
+  min,
+  step = 1,
+  unit,
+}: {
+  value: number;
+  onCommit: (v: number) => void;
+  min?: number;
+  step?: number;
+  unit?: string;
+}) {
+  const [raw, setRaw] = useState(value.toFixed(2));
+
+  // Keep raw in sync when value changes externally (e.g. from drag)
+  useEffect(() => { setRaw(value.toFixed(2)); }, [value]);
+
+  const commit = () => {
+    const v = parseFloat(raw);
+    if (!isNaN(v) && (min === undefined || v >= min)) {
+      onCommit(v);
+    } else {
+      setRaw(value.toFixed(2)); // revert
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+      <input
+        type="number"
+        style={{ ...inputStyle, flex: 1 }}
+        value={raw}
+        min={min}
+        step={step}
+        onChange={(e) => setRaw(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.currentTarget.blur(); } }}
+      />
+      {unit && <span style={{ color: '#6b7280', fontSize: 11, whiteSpace: 'nowrap' }}>{unit}</span>}
+    </div>
+  );
+}
+
+function roadLength(road: Road): number {
+  if (road.kind === 'line') {
+    const dx = road.end.x - road.start.x;
+    const dy = road.end.y - road.start.y;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+  return road.radius * arcSweep(road.startAngle, road.endAngle, road.clockwise);
+}
+
 function RoadPanel({ road, dispatch }: { road: Road; dispatch: (a: MapAction) => void }) {
   const { lanes } = road;
   const update = (patch: Partial<RoadLanes>) =>
@@ -81,6 +136,15 @@ function RoadPanel({ road, dispatch }: { road: Road; dispatch: (a: MapAction) =>
       <div style={{ fontWeight: 600, color: '#a78bfa' }}>
         Road ({road.kind}) — {road.id}
       </div>
+      <Field label="Length">
+        <PreciseNumInput
+          value={roadLength(road)}
+          min={0.1}
+          step={1}
+          unit="m"
+          onCommit={(v) => dispatch({ type: 'SET_ROAD_LENGTH', id: road.id, length: v })}
+        />
+      </Field>
       <Field label="Left lanes">
         <NumInput value={lanes.left} min={0} max={3} step={1} onChange={(v) => update({ left: Math.round(v) })} />
       </Field>
@@ -123,6 +187,7 @@ function VehiclePanel({ vehicle, dispatch }: { vehicle: Vehicle; dispatch: (a: M
 
 function JunctionPanel({ junction, dispatch }: { junction: Junction; dispatch: (a: MapAction) => void }) {
   const rotationDeg = Math.round((junction.rotation * 180) / Math.PI);
+  const upd = (patch: Partial<Junction>) => dispatch({ type: 'UPDATE_JUNCTION', id: junction.id, patch });
   return (
     <>
       <div style={{ fontWeight: 600, color: '#fbbf24' }}>
@@ -130,28 +195,32 @@ function JunctionPanel({ junction, dispatch }: { junction: Junction; dispatch: (
       </div>
       <Field label="Position">
         <div style={{ color: '#9ca3af' }}>
-          x: {junction.x.toFixed(1)} m<br />
-          y: {junction.y.toFixed(1)} m
+          x: {junction.x.toFixed(1)} m &nbsp; y: {junction.y.toFixed(1)} m
         </div>
       </Field>
+      <Field label="Lane width (m)">
+        <NumInput
+          value={junction.laneWidth}
+          min={2.8}
+          max={4.0}
+          step={0.1}
+          onChange={(v) => upd({ laneWidth: v })}
+        />
+      </Field>
       {junction.junctionType === 't-junction' && (
-        <Field label="Closed side rotation">
+        <Field label="Closed side">
           <select
             style={{ ...inputStyle, cursor: 'pointer' }}
             value={rotationDeg}
             onChange={(e) => {
               const deg = parseInt(e.target.value, 10);
-              dispatch({
-                type: 'UPDATE_JUNCTION',
-                id: junction.id,
-                patch: { rotation: (deg * Math.PI) / 180 },
-              });
+              upd({ rotation: (deg * Math.PI) / 180 });
             }}
           >
-            <option value={0}>Bottom (0°)</option>
-            <option value={90}>Right (90°)</option>
-            <option value={180}>Top (180°)</option>
-            <option value={270}>Left (270°)</option>
+            <option value={0}>South (0°)</option>
+            <option value={90}>East (90°)</option>
+            <option value={180}>North (180°)</option>
+            <option value={270}>West (270°)</option>
           </select>
         </Field>
       )}

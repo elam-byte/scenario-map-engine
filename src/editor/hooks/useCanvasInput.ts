@@ -9,7 +9,7 @@ import {
 } from '@shared/types';
 import type { Viewport } from '../renderer/viewport';
 import { canvasToWorld, zoomAtPoint, panByPixels } from '../renderer/viewport';
-import type { EditorState, EditorStateActions, ArcGesture } from './useEditorState';
+import type { EditorState, EditorStateActions, ArcGesture, DragState } from './useEditorState';
 import type { MapAction } from '../store/mapReducer';
 import {
   snapToGrid,
@@ -17,18 +17,39 @@ import {
   distanceToArc,
   roadHalfWidth,
   pointInOrientedRect,
+  pointInJunction,
   arcFromThreePoints,
   snapToFeatures,
 } from '@shared/geometry';
-import { JUNCTION_HALF } from '@shared/types';
 
 const SNAP_GRID = 1; // metres
 const HIT_THRESHOLD_WORLD = 3; // metres
-const JUNCTION_SNAP_THRESHOLD = 6; // metres — snap road endpoints to junction edges
+const FEATURE_SNAP_THRESHOLD = 6; // metres — snap to junction arm tips and road endpoints
+
+/** Tools that get feature-snapping on hover */
+const SNAP_TOOLS = new Set(['draw-line', 'draw-arc', 'place-junction', 'place-t-junction', 'place-vehicle']);
 
 let idCounter = 0;
 function nextId(prefix: string): string {
   return `${prefix}-${++idCounter}`;
+}
+
+const PASTE_OFFSET = 5; // metres
+
+/** Returns an ID guaranteed to be higher than any existing ID number in the model. */
+function nextUniqueId(prefix: string, model: MapModel): string {
+  const all = [
+    ...model.junctions.map((j) => j.id),
+    ...model.roads.map((r) => r.id),
+    ...model.vehicles.map((v) => v.id),
+  ];
+  let max = idCounter;
+  for (const id of all) {
+    const m = id.match(/-(\d+)$/);
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  idCounter = max + 1;
+  return `${prefix}-${idCounter}`;
 }
 
 function getCanvasPoint(canvas: HTMLCanvasElement, e: MouseEvent) {
@@ -40,16 +61,30 @@ function getCanvasPoint(canvas: HTMLCanvasElement, e: MouseEvent) {
   };
 }
 
+function getEntityOrigin(id: string, model: MapModel): { pt: { x: number; y: number }; type: DragState['entityType'] } | null {
+  const j = model.junctions.find((j) => j.id === id);
+  if (j) return { pt: { x: j.x, y: j.y }, type: 'junction' };
+  const v = model.vehicles.find((v) => v.id === id);
+  if (v) return { pt: { x: v.x, y: v.y }, type: 'vehicle' };
+  const r = model.roads.find((r) => r.id === id);
+  if (r) {
+    const pt = r.kind === 'line' ? r.start : r.center;
+    return { pt, type: 'road' };
+  }
+  return null;
+}
+
 function hitTestEntities(
   worldPt: { x: number; y: number },
   model: MapModel,
 ): string | null {
   const t = HIT_THRESHOLD_WORLD;
 
-  // Junctions first — 10m square hit area
+  // Junctions — use cross/T shape hit test
   for (const j of model.junctions) {
-    const h = JUNCTION_HALF + t;
-    if (Math.abs(worldPt.x - j.x) <= h && Math.abs(worldPt.y - j.y) <= h) return j.id;
+    if (pointInJunction(worldPt, j)) return j.id;
+    // Also check a small threshold around the junction center
+    if (Math.abs(worldPt.x - j.x) <= t && Math.abs(worldPt.y - j.y) <= t) return j.id;
   }
 
   // Vehicles
@@ -83,7 +118,14 @@ export function useCanvasInput(
   editorActions: EditorStateActions,
   dispatch: (action: MapAction) => void,
 ) {
-  const panRef = useRef<{ lastX: number; lastY: number } | null>(null);
+  const panRef  = useRef<{ lastX: number; lastY: number } | null>(null);
+  const dragRef = useRef<{
+    id: string;
+    entityType: DragState['entityType'];
+    startWorld: { x: number; y: number };
+    entityOrigin: { x: number; y: number };
+  } | null>(null);
+
   // Keep stable refs to avoid stale closures in event listeners
   const stateRef = useRef(editorState);
   const modelRef = useRef(model);
@@ -114,6 +156,34 @@ export function useCanvasInput(
         e.preventDefault();
         return;
       }
+
+      // Drag-to-move in select mode
+      if (e.button === 0 && stateRef.current.tool === 'select') {
+        const rawWorld = canvasToWorld(canvasPt, vp);
+        const model = modelRef.current;
+        const state = stateRef.current;
+        const hitId = hitTestEntities(rawWorld, model);
+        if (hitId && hitId === state.selectedId) {
+          const info = getEntityOrigin(hitId, model);
+          if (info) {
+            dragRef.current = {
+              id: hitId,
+              entityType: info.type,
+              startWorld: rawWorld,
+              entityOrigin: info.pt,
+            };
+            editorActions.startDrag({
+              id: hitId,
+              entityType: info.type,
+              startWorld: rawWorld,
+              entityOrigin: info.pt,
+              currentWorld: rawWorld,
+            });
+            e.preventDefault();
+            return;
+          }
+        }
+      }
     };
 
     const onMouseMove = (e: MouseEvent) => {
@@ -131,36 +201,77 @@ export function useCanvasInput(
       }
 
       const rawWorld = canvasToWorld(canvasPt, vp);
+
+      // Drag
+      if (dragRef.current) {
+        editorActions.updateDrag(rawWorld);
+        return;
+      }
+
       const state = stateRef.current;
       const model = modelRef.current;
-      
+
       let hoverPt = rawWorld;
-      if (state.tool === 'draw-line' || state.tool === 'draw-arc') {
-        hoverPt = snapToFeatures(rawWorld, model, JUNCTION_SNAP_THRESHOLD) ?? snapToGrid(rawWorld, SNAP_GRID);
+      let snapped = false;
+      if (SNAP_TOOLS.has(state.tool)) {
+        const featureSnap = snapToFeatures(rawWorld, model, FEATURE_SNAP_THRESHOLD);
+        if (featureSnap) {
+          hoverPt = featureSnap;
+          snapped = true;
+        } else {
+          hoverPt = snapToGrid(rawWorld, SNAP_GRID);
+        }
       } else {
         hoverPt = snapToGrid(rawWorld, SNAP_GRID);
       }
-      
-      editorActions.setHoverPoint(hoverPt);
+
+      editorActions.setHoverPoint(hoverPt, snapped);
     };
 
-    const onMouseUp = (_e: MouseEvent) => {
+    const onMouseUp = (e: MouseEvent) => {
       if (panRef.current) {
         panRef.current = null;
+        return;
+      }
+
+      if (dragRef.current) {
+        const vp = viewportRef.current;
+        if (!vp) { dragRef.current = null; editorActions.endDrag(); return; }
+        const canvasPt = getCanvasPoint(canvas, e);
+        const rawWorld = canvasToWorld(canvasPt, vp);
+        const { id, entityType, startWorld, entityOrigin } = dragRef.current;
+        const dx = rawWorld.x - startWorld.x;
+        const dy = rawWorld.y - startWorld.y;
+        const newX = entityOrigin.x + dx;
+        const newY = entityOrigin.y + dy;
+
+        if (entityType === 'junction') {
+          dispatch({ type: 'UPDATE_JUNCTION', id, patch: { x: newX, y: newY } });
+        } else if (entityType === 'vehicle') {
+          dispatch({ type: 'UPDATE_VEHICLE', id, patch: { x: newX, y: newY } });
+        } else {
+          dispatch({ type: 'MOVE_ROAD', id, dx, dy });
+        }
+
+        dragRef.current = null;
+        editorActions.endDrag();
       }
     };
 
     const onClick = (e: MouseEvent) => {
       if (e.altKey) return; // was pan
+      // Skip clicks that were drag releases
+      if (dragRef.current) return;
       const vp = viewportRef.current;
       if (!vp) return;
       const canvasPt = getCanvasPoint(canvas, e);
       const rawWorld = canvasToWorld(canvasPt, vp);
-      const worldPt = snapToGrid(rawWorld, SNAP_GRID);
-      const state = stateRef.current;
-      const model = modelRef.current;
-      
-      const snapWorldPt = snapToFeatures(rawWorld, model, JUNCTION_SNAP_THRESHOLD) ?? worldPt;
+      const worldPt  = snapToGrid(rawWorld, SNAP_GRID);
+      const state    = stateRef.current;
+      const model    = modelRef.current;
+
+      const featureSnap = snapToFeatures(rawWorld, model, FEATURE_SNAP_THRESHOLD);
+      const snapWorldPt = featureSnap ?? worldPt;
 
       switch (state.tool) {
         case 'select': {
@@ -219,8 +330,8 @@ export function useCanvasInput(
 
         case 'place-junction': {
           const junction: Junction = {
-            id: nextId('j'), x: worldPt.x, y: worldPt.y,
-            junctionType: '4-way', rotation: 0,
+            id: nextId('j'), x: snapWorldPt.x, y: snapWorldPt.y,
+            junctionType: '4-way', rotation: 0, laneWidth: DEFAULT_LANE_WIDTH,
           };
           dispatch({ type: 'ADD_JUNCTION', junction });
           break;
@@ -228,8 +339,8 @@ export function useCanvasInput(
 
         case 'place-t-junction': {
           const junction: Junction = {
-            id: nextId('j'), x: worldPt.x, y: worldPt.y,
-            junctionType: 't-junction', rotation: 0,
+            id: nextId('j'), x: snapWorldPt.x, y: snapWorldPt.y,
+            junctionType: 't-junction', rotation: 0, laneWidth: DEFAULT_LANE_WIDTH,
           };
           dispatch({ type: 'ADD_JUNCTION', junction });
           break;
@@ -238,8 +349,8 @@ export function useCanvasInput(
         case 'place-vehicle': {
           const vehicle: Vehicle = {
             id: nextId('v'),
-            x: worldPt.x,
-            y: worldPt.y,
+            x: snapWorldPt.x,
+            y: snapWorldPt.y,
             heading: 0,
             length: DEFAULT_VEHICLE_LENGTH,
             width: DEFAULT_VEHICLE_WIDTH,
@@ -258,6 +369,7 @@ export function useCanvasInput(
 
     const onKeyDown = (e: KeyboardEvent) => {
       const state = stateRef.current;
+      const model = modelRef.current;
 
       if (e.key === 'Escape') {
         editorActions.cancelGesture();
@@ -283,24 +395,72 @@ export function useCanvasInput(
         dispatch({ type: 'REDO' });
         return;
       }
+
+      // Copy
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+        if (!state.selectedId) return;
+        const j = model.junctions.find((j) => j.id === state.selectedId);
+        if (j) { editorActions.setClipboard({ kind: 'junction', entity: j }); return; }
+        const v = model.vehicles.find((v) => v.id === state.selectedId);
+        if (v) { editorActions.setClipboard({ kind: 'vehicle', entity: v }); return; }
+        const r = model.roads.find((r) => r.id === state.selectedId);
+        if (r) { editorActions.setClipboard({ kind: 'road', entity: r }); return; }
+        return;
+      }
+
+      // Paste
+      if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+        e.preventDefault();
+        const cb = state.clipboard;
+        if (!cb) return;
+        const o = PASTE_OFFSET;
+        if (cb.kind === 'junction') {
+          const id = nextUniqueId('j', model);
+          const j = { ...cb.entity, id, x: cb.entity.x + o, y: cb.entity.y + o };
+          dispatch({ type: 'ADD_JUNCTION', junction: j });
+          editorActions.setSelectedId(id);
+        } else if (cb.kind === 'vehicle') {
+          const id = nextUniqueId('v', model);
+          const v = { ...cb.entity, id, x: cb.entity.x + o, y: cb.entity.y + o };
+          dispatch({ type: 'ADD_VEHICLE', vehicle: v });
+          editorActions.setSelectedId(id);
+        } else if (cb.kind === 'road') {
+          const id = nextUniqueId('r', model);
+          const r = cb.entity;
+          if (r.kind === 'line') {
+            dispatch({ type: 'ADD_ROAD', road: {
+              ...r, id,
+              start: { x: r.start.x + o, y: r.start.y + o },
+              end:   { x: r.end.x   + o, y: r.end.y   + o },
+            }});
+          } else {
+            dispatch({ type: 'ADD_ROAD', road: {
+              ...r, id,
+              center: { x: r.center.x + o, y: r.center.y + o },
+            }});
+          }
+          editorActions.setSelectedId(id);
+        }
+        return;
+      }
     };
 
-    canvas.addEventListener('wheel', onWheel, { passive: false });
-    canvas.addEventListener('mousedown', onMouseDown);
-    canvas.addEventListener('mousemove', onMouseMove);
-    canvas.addEventListener('mouseup', onMouseUp);
-    canvas.addEventListener('click', onClick);
+    canvas.addEventListener('wheel',      onWheel,     { passive: false });
+    canvas.addEventListener('mousedown',  onMouseDown);
+    canvas.addEventListener('mousemove',  onMouseMove);
+    canvas.addEventListener('mouseup',    onMouseUp);
+    canvas.addEventListener('click',      onClick);
     canvas.addEventListener('mouseleave', onMouseLeave);
-    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown',    onKeyDown);
 
     return () => {
-      canvas.removeEventListener('wheel', onWheel);
-      canvas.removeEventListener('mousedown', onMouseDown);
-      canvas.removeEventListener('mousemove', onMouseMove);
-      canvas.removeEventListener('mouseup', onMouseUp);
-      canvas.removeEventListener('click', onClick);
+      canvas.removeEventListener('wheel',      onWheel);
+      canvas.removeEventListener('mousedown',  onMouseDown);
+      canvas.removeEventListener('mousemove',  onMouseMove);
+      canvas.removeEventListener('mouseup',    onMouseUp);
+      canvas.removeEventListener('click',      onClick);
       canvas.removeEventListener('mouseleave', onMouseLeave);
-      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keydown',    onKeyDown);
     };
   }, [canvasRef, viewportRef, setViewport, editorActions, dispatch]);
   // Note: model and editorState are read via refs to avoid re-attaching listeners

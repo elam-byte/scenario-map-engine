@@ -3,40 +3,60 @@ import type { WorldSnapshot } from '@shared/types';
 
 const MAX_VEHICLES = 2000;
 
+// Vehicle body height in metres (lower chassis)
+const BODY_H   = 0.8;
+// Cabin height in metres (upper roof section)
+const CABIN_H  = 0.7;
+// Cabin dimensions relative to body
+const CABIN_L  = 0.55;  // ratio of vehicle length
+const CABIN_W  = 0.90;  // ratio of vehicle width
+// Cabin center is offset toward the front of the vehicle
+const CABIN_FWD = 0.10; // fraction of vehicle length
+
 export class VehicleInstancer {
-  readonly mesh: THREE.InstancedMesh;
-  private dummy = new THREE.Object3D();
-  private idToIndex = new Map<string, number>();
-  private nextIndex = 0;
-  private colorCache = new Map<string, THREE.Color>();
+  /** Body mesh — per-instance vehicle color */
+  readonly bodyMesh: THREE.InstancedMesh;
+  /** Cabin/roof mesh — fixed dark color, shows car silhouette + front bias */
+  readonly cabinMesh: THREE.InstancedMesh;
+
+  private dummy        = new THREE.Object3D();
+  private idToIndex    = new Map<string, number>();
+  private nextIndex    = 0;
+  private colorCache   = new Map<string, THREE.Color>();
   private defaultColor = new THREE.Color('#22c55e');
 
   constructor(scene: THREE.Scene) {
-    const geometry = new THREE.BoxGeometry(1, 1, 0.15);
-    const material = new THREE.MeshBasicMaterial();
-    this.mesh = new THREE.InstancedMesh(geometry, material, MAX_VEHICLES);
-    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.mesh.count = 0;
-
-    // Must initialise instanceColor by calling setColorAt at least once
-    this.mesh.setColorAt(0, this.defaultColor);
-    if (this.mesh.instanceColor) {
-      this.mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
+    // Body
+    const bodyGeo = new THREE.BoxGeometry(1, 1, 1);
+    const bodyMat = new THREE.MeshStandardMaterial({ roughness: 0.5, metalness: 0.3 });
+    this.bodyMesh = new THREE.InstancedMesh(bodyGeo, bodyMat, MAX_VEHICLES);
+    this.bodyMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.bodyMesh.count = 0;
+    this.bodyMesh.setColorAt(0, this.defaultColor);
+    if (this.bodyMesh.instanceColor) {
+      this.bodyMesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
     }
+    this.bodyMesh.frustumCulled = false;
 
-    // Hide all instances initially (scale to 0)
+    // Cabin
+    const cabinGeo = new THREE.BoxGeometry(1, 1, 1);
+    const cabinMat = new THREE.MeshStandardMaterial({ color: 0x1a1a2e, roughness: 0.4, metalness: 0.5 });
+    this.cabinMesh = new THREE.InstancedMesh(cabinGeo, cabinMat, MAX_VEHICLES);
+    this.cabinMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.cabinMesh.count = 0;
+    this.cabinMesh.frustumCulled = false;
+
+    // Hide all instances initially
     const zero = new THREE.Matrix4().makeScale(0, 0, 0);
     for (let i = 0; i < MAX_VEHICLES; i++) {
-      this.mesh.setMatrixAt(i, zero);
+      this.bodyMesh.setMatrixAt(i, zero);
+      this.cabinMesh.setMatrixAt(i, zero);
     }
-    this.mesh.instanceMatrix.needsUpdate = true;
+    this.bodyMesh.instanceMatrix.needsUpdate  = true;
+    this.cabinMesh.instanceMatrix.needsUpdate = true;
 
-    // Disable frustum culling — instances are spread across the world but the
-    // mesh's own bounding sphere sits at the origin, so the default culling
-    // hides all vehicles when the camera is centred on the map.
-    this.mesh.frustumCulled = false;
-
-    scene.add(this.mesh);
+    scene.add(this.bodyMesh);
+    scene.add(this.cabinMesh);
   }
 
   updateFromSnapshot(snapshot: WorldSnapshot): void {
@@ -50,37 +70,55 @@ export class VehicleInstancer {
         this.idToIndex.set(v.id, idx);
       }
 
-      this.dummy.position.set(v.x, v.y, 0);
+      // --- Body: full footprint, lower half ---
+      this.dummy.position.set(v.x, v.y, BODY_H / 2);
       this.dummy.rotation.set(0, 0, v.heading);
-      this.dummy.scale.set(v.length, v.width, 1.5);
+      this.dummy.scale.set(v.length, v.width, BODY_H);
       this.dummy.updateMatrix();
-      this.mesh.setMatrixAt(idx, this.dummy.matrix);
+      this.bodyMesh.setMatrixAt(idx, this.dummy.matrix);
 
-      // Color — cache THREE.Color objects to avoid per-tick allocation
+      // --- Cabin: narrower, sits on top of body, offset toward front ---
+      const fwdX = Math.cos(v.heading) * v.length * CABIN_FWD;
+      const fwdY = Math.sin(v.heading) * v.length * CABIN_FWD;
+      this.dummy.position.set(
+        v.x + fwdX,
+        v.y + fwdY,
+        BODY_H + CABIN_H / 2,
+      );
+      this.dummy.scale.set(v.length * CABIN_L, v.width * CABIN_W, CABIN_H);
+      this.dummy.updateMatrix();
+      this.cabinMesh.setMatrixAt(idx, this.dummy.matrix);
+
+      // --- Color (body only; cabin is always dark) ---
       const colorHex = v.color ?? '#22c55e';
       let color = this.colorCache.get(colorHex);
       if (!color) {
         color = new THREE.Color(colorHex);
         this.colorCache.set(colorHex, color);
       }
-      this.mesh.setColorAt(idx, color);
+      this.bodyMesh.setColorAt(idx, color);
     }
 
-    this.mesh.count = this.nextIndex;
-    this.mesh.instanceMatrix.needsUpdate = true;
-    if (this.mesh.instanceColor) {
-      this.mesh.instanceColor.needsUpdate = true;
+    this.bodyMesh.count  = this.nextIndex;
+    this.cabinMesh.count = this.nextIndex;
+    this.bodyMesh.instanceMatrix.needsUpdate  = true;
+    this.cabinMesh.instanceMatrix.needsUpdate = true;
+    if (this.bodyMesh.instanceColor) {
+      this.bodyMesh.instanceColor.needsUpdate = true;
     }
   }
 
   reset(): void {
     this.idToIndex.clear();
     this.nextIndex = 0;
-    this.mesh.count = 0;
+    this.bodyMesh.count  = 0;
+    this.cabinMesh.count = 0;
   }
 
   dispose(): void {
-    this.mesh.geometry.dispose();
-    (this.mesh.material as THREE.Material).dispose();
+    this.bodyMesh.geometry.dispose();
+    this.cabinMesh.geometry.dispose();
+    (this.bodyMesh.material  as THREE.Material).dispose();
+    (this.cabinMesh.material as THREE.Material).dispose();
   }
 }

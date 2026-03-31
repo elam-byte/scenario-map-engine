@@ -1,4 +1,4 @@
-import type { MapModel } from '@shared/types';
+import type { MapModel, Road } from '@shared/types';
 import type { Viewport } from './viewport';
 import type { EditorState } from '../hooks/useEditorState';
 import { applyViewportTransform } from './viewport';
@@ -26,10 +26,48 @@ export function drawMap(
   // Apply Y-flip viewport transform — all subsequent draw calls use world coords
   applyViewportTransform(ctx, vp);
 
+  const { dragState, selectedId } = editorState;
+  const dragId   = dragState?.id ?? null;
+  const dragPt   = dragState ? dragState.currentWorld : null;
+
+  // Compute drag position relative to entity origin
+  let dragPos: { x: number; y: number } | null = null;
+  if (dragState && dragPt) {
+    const { entityOrigin, startWorld } = dragState;
+    const dx = dragPt.x - startWorld.x;
+    const dy = dragPt.y - startWorld.y;
+    dragPos = { x: entityOrigin.x + dx, y: entityOrigin.y + dy };
+  }
+
+  // When a road is being dragged, translate its geometry for rendering
+  let roadsForDraw: Road[] = model.roads;
+  if (dragState?.entityType === 'road' && dragState.id && dragPos) {
+    const { entityOrigin, startWorld } = dragState;
+    const dx = dragPt!.x - startWorld.x;
+    const dy = dragPt!.y - startWorld.y;
+    roadsForDraw = model.roads.map((r) => {
+      if (r.id !== dragState.id) return r;
+      if (r.kind === 'line') {
+        return {
+          ...r,
+          start: { x: r.start.x + dx, y: r.start.y + dy },
+          end:   { x: r.end.x   + dx, y: r.end.y   + dy },
+        };
+      }
+      return { ...r, center: { x: r.center.x + dx, y: r.center.y + dy } };
+    });
+  }
+
   drawGrid(ctx, vp);
-  drawRoads(ctx, model.roads, editorState.selectedId, vp);
-  drawJunctions(ctx, model.junctions, editorState.selectedId, vp);
-  drawVehicles(ctx, model.vehicles, editorState.selectedId, vp);
+  drawRoads(ctx, roadsForDraw, selectedId, vp);
+  drawJunctions(ctx, model.junctions, selectedId, vp,
+    dragState?.entityType === 'junction' ? dragId : null,
+    dragState?.entityType === 'junction' ? dragPos : null,
+  );
+  drawVehicles(ctx, model.vehicles, selectedId, vp,
+    dragState?.entityType === 'vehicle' ? dragId : null,
+    dragState?.entityType === 'vehicle' ? dragPos : null,
+  );
 
   // In-progress gesture overlays
   drawGestureOverlay(ctx, vp, editorState);
@@ -40,7 +78,18 @@ function drawGestureOverlay(
   vp: Viewport,
   editorState: EditorState,
 ): void {
-  const { tool, lineGesture, arcGesture, hoverPoint } = editorState;
+  const { tool, lineGesture, arcGesture, hoverPoint, hoverSnapped } = editorState;
+
+  // Snap indicator ring
+  if (hoverPoint && hoverSnapped) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(hoverPoint.x, hoverPoint.y, 1.8, 0, Math.PI * 2);
+    ctx.strokeStyle = '#4af';
+    ctx.lineWidth   = 0.35 / vp.zoom;
+    ctx.stroke();
+    ctx.restore();
+  }
 
   if (tool === 'draw-line' && lineGesture && hoverPoint) {
     drawGhostLine(ctx, lineGesture.start, hoverPoint, vp.zoom);
@@ -86,11 +135,11 @@ function drawGestureOverlay(
   }
 
   if (tool === 'place-junction' && hoverPoint) {
-    drawGhostJunction(ctx, hoverPoint, vp.zoom, '4-way');
+    drawGhostJunction(ctx, hoverPoint, vp, '4-way');
   }
 
   if (tool === 'place-t-junction' && hoverPoint) {
-    drawGhostJunction(ctx, hoverPoint, vp.zoom, 't-junction', 0);
+    drawGhostJunction(ctx, hoverPoint, vp, 't-junction', 0);
   }
 
   if (tool === 'place-vehicle' && hoverPoint) {

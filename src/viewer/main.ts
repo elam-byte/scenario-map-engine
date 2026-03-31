@@ -22,24 +22,38 @@ renderer.setClearColor(0x0d0d1a);
 const scene = new THREE.Scene();
 
 // ---------------------------------------------------------------------------
-// Camera — single instance, updated in-place when map changes
+// Lighting — required for MeshStandardMaterial on vehicles
 // ---------------------------------------------------------------------------
 
-const camera = new THREE.OrthographicCamera(0, 1, 1, 0, 0.1, 5000);
-camera.up.set(0, 1, 0);
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.45);
+scene.add(ambientLight);
+
+// Key light: from viewer-front-above, creates bright top + front faces
+const keyLight = new THREE.DirectionalLight(0xffffff, 1.0);
+keyLight.position.set(1, -0.5, 2);
+scene.add(keyLight);
+
+// Fill light: subtle blue from opposite side, lifts shadow darkness
+const fillLight = new THREE.DirectionalLight(0x8090ff, 0.3);
+fillLight.position.set(-1, 1, 0.5);
+scene.add(fillLight);
+
+// ---------------------------------------------------------------------------
+// Camera — perspective with a static angle (pan/zoom only, no rotation)
+// ---------------------------------------------------------------------------
+
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 1, 10000);
+camera.up.set(0, 0, 1);
 
 function fitCamera(worldW: number, worldH: number) {
-  const aspect = window.innerWidth / window.innerHeight;
   const cx = worldW / 2;
   const cy = worldH / 2;
-  const halfH = (worldH / 2) * 1.1;   // 10% padding
-  const halfW = halfH * aspect;
+  const d  = Math.max(worldW, worldH);
 
-  camera.left   = cx - halfW;
-  camera.right  = cx + halfW;
-  camera.top    = cy + halfH;
-  camera.bottom = cy - halfH;
-  camera.position.set(cx, cy, 1000);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.far    = d * 8;
+  camera.near   = 1;
+  camera.position.set(cx, cy - d * 0.5, d * 0.65);
   camera.lookAt(cx, cy, 0);
   camera.updateProjectionMatrix();
 
@@ -48,19 +62,19 @@ function fitCamera(worldW: number, worldH: number) {
 }
 
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableRotate = false;
+controls.enableRotate = true;
 controls.enableZoom   = true;
 controls.enablePan    = true;
 controls.zoomSpeed    = 1.2;
 
-// Default: show a 500×500 world centred at (250,250)
-fitCamera(500, 500);
+// Default: show a 500×281 world
+fitCamera(500, 281);
 
 // ---------------------------------------------------------------------------
 // Scene objects — always alive
 // ---------------------------------------------------------------------------
 
-const sceneBuilder   = new SceneBuilder();
+const sceneBuilder    = new SceneBuilder();
 const vehicleInstancer = new VehicleInstancer(scene);
 let currentModel: MapModel | null = null;
 
@@ -138,7 +152,7 @@ connectWsBtn.addEventListener('click', () => {
 window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
   const w = currentModel?.meta.world.width  ?? 500;
-  const h = currentModel?.meta.world.height ?? 500;
+  const h = currentModel?.meta.world.height ?? 281;
   fitCamera(w, h);
 });
 
